@@ -8,55 +8,49 @@ import "chart.js/auto";
 const Wallet = () => {
   const [wallet, setWallet] = useState(null);
   const [privateKey, setPrivateKey] = useState("");
-  const [balance, setBalance] = useState("0.0");
+  const [recoveryPhrase, setRecoveryPhrase] = useState("");
   const [prices, setPrices] = useState({});
+  const [balanceETH, setBalanceETH] = useState("0.0");
+  const [balanceUSDC, setBalanceUSDC] = useState("0.0");
   const [selectedToken, setSelectedToken] = useState("bitcoin");
   const [chartData, setChartData] = useState(null);
-  const [swapAmount, setSwapAmount] = useState("");
-  const [swapFrom, setSwapFrom] = useState("ethereum");
-  const [swapTo, setSwapTo] = useState("bitcoin");
+  const [swapAmount, setSwapAmount] = useState("0");
+  const [swapDirection, setSwapDirection] = useState("ETH_TO_USDC");
 
-  // Token List
-  const tokenList = ["ethereum", "bitcoin", "solana", "polygon", "cardano", "dogecoin"];
-
-  // Fetch Live Prices
   useEffect(() => {
-    const fetchPrices = async () => {
+    const fetchTokenPrices = async () => {
       try {
         const response = await axios.get(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${tokenList.join(",")}&vs_currencies=usd`
+          "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,bitcoin,solana,polygon,cardano,dogecoin&vs_currencies=usd"
         );
         setPrices(response.data);
       } catch (error) {
-        console.error("Error fetching prices:", error);
+        console.error("Error fetching token prices:", error);
       }
     };
 
-    fetchPrices();
-    const interval = setInterval(fetchPrices, 10000);
+    fetchTokenPrices();
+    const interval = setInterval(fetchTokenPrices, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch Token Chart Data
   useEffect(() => {
     const fetchChartData = async () => {
       try {
         const response = await axios.get(
           `https://api.coingecko.com/api/v3/coins/${selectedToken}/market_chart?vs_currency=usd&days=7&interval=daily`
         );
-        const data = response.data.prices.map(([timestamp, price]) => ({
-          time: new Date(timestamp).toLocaleDateString(),
-          price,
-        }));
+        const labels = response.data.prices.map((price) => new Date(price[0]).toLocaleDateString());
+        const data = response.data.prices.map((price) => price[1]);
 
         setChartData({
-          labels: data.map((entry) => entry.time),
+          labels,
           datasets: [
             {
-              label: `${selectedToken.toUpperCase()} Price`,
-              data: data.map((entry) => entry.price),
-              borderColor: "#ffcc80",
-              backgroundColor: "rgba(255, 204, 128, 0.2)",
+              label: `Price of ${selectedToken.toUpperCase()}`,
+              data,
+              borderColor: "orange",
+              backgroundColor: "rgba(255, 165, 0, 0.2)",
               fill: true,
             },
           ],
@@ -65,134 +59,74 @@ const Wallet = () => {
         console.error("Error fetching chart data:", error);
       }
     };
-
     fetchChartData();
   }, [selectedToken]);
 
-  // Generate New Wallet
+  const generateRecoveryPhrase = () => {
+    const words = [
+      "apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew",
+      "kiwi", "lemon", "mango", "nectarine", "orange", "papaya", "quince", "raspberry",
+      "strawberry", "tangerine", "ugli", "vanilla", "watermelon", "xigua", "yellow", "zucchini"
+    ];
+    return Array.from({ length: 12 }, () => words[Math.floor(Math.random() * words.length)]).join(" ");
+  };
+
   const generateWallet = () => {
     const newWallet = ethers.Wallet.createRandom();
     setWallet(newWallet);
-    setBalance("0.0");
+    setPrivateKey(newWallet.privateKey);
+    setRecoveryPhrase(generateRecoveryPhrase());
   };
 
-  // Import Existing Wallet
-  const importWallet = () => {
-    try {
-      const importedWallet = new ethers.Wallet(privateKey);
-      setWallet(importedWallet);
-      fetchBalance(importedWallet);
-    } catch (error) {
-      alert("Invalid Private Key");
-    }
+  const fetchBalances = async () => {
+    if (!wallet) return;
+    const provider = new ethers.providers.JsonRpcProvider("https://shape-sepolia.g.alchemy.com/v2/-GAKmb1tfiiZaXGWZJh-2gZNOCTGoGWj");
+    const balance = await provider.getBalance(wallet.address);
+    setBalanceETH(ethers.utils.formatEther(balance));
+    
+    const usdcContract = new ethers.Contract("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", ["function balanceOf(address owner) view returns (uint256)"], provider);
+    const usdcBalance = await usdcContract.balanceOf(wallet.address);
+    setBalanceUSDC(ethers.utils.formatUnits(usdcBalance, 6));
   };
 
-  // Fetch User Balance
-  const fetchBalance = async (walletInstance) => {
-    try {
-      const provider = new ethers.JsonRpcProvider("https://eth.llamarpc.com");
-      const balanceWei = await provider.getBalance(walletInstance.address);
-      setBalance(ethers.formatEther(balanceWei));
-    } catch (error) {
-      console.error("Error fetching balance:", error);
-    }
-  };
+  const swapTokens = async () => {
+    if (!wallet) return;
+    const provider = new ethers.providers.JsonRpcProvider("https://shape-sepolia.g.alchemy.com/v2/-GAKmb1tfiiZaXGWZJh-2gZNOCTGoGWj");
+    const signer = wallet.connect(provider);
 
-  // Swap Tokens (Mock Function)
-  const swapTokens = () => {
-    if (!wallet) {
-      alert("Please connect a wallet first.");
-      return;
+    if (swapDirection === "ETH_TO_USDC") {
+      const uniswapRouter = new ethers.Contract(
+        "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+        ["function swapExactETHForTokens(uint amountOutMin, address[] path, address to, uint deadline) payable"],
+        signer
+      );
+      await uniswapRouter.swapExactETHForTokens(
+        0,
+        ["0xC02aaa39b223FE8D0A0e5C4F27ead9083C756Cc2", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"],
+        wallet.address,
+        Math.floor(Date.now() / 1000) + 60 * 10,
+        { value: ethers.utils.parseEther(swapAmount) }
+      );
     }
-
-    if (!swapAmount || isNaN(swapAmount) || swapAmount <= 0) {
-      alert("Enter a valid amount to swap.");
-      return;
-    }
-
-    alert(`Swapping ${swapAmount} ${swapFrom.toUpperCase()} to ${swapTo.toUpperCase()} (Demo Functionality)`);
+    fetchBalances();
   };
 
   return (
     <Container maxWidth="sm" sx={{ mt: 5 }}>
       <Paper elevation={3} sx={{ padding: 4, textAlign: "center", backgroundColor: "#212121", color: "#fff" }}>
-        <Typography variant="h4" gutterBottom>
-          MetaMask Clone
-        </Typography>
-
-        {/* Token Price Chart */}
-        <Box sx={{ textAlign: "left", mt: 2, p: 2, backgroundColor: "#333", borderRadius: 2 }}>
-          <Typography variant="h6">Price Chart ({selectedToken.toUpperCase()})</Typography>
-          <Select
-            fullWidth
-            value={selectedToken}
-            onChange={(e) => setSelectedToken(e.target.value)}
-            sx={{ backgroundColor: "#444", color: "#fff", mt: 1 }}
-          >
-            {tokenList.map((token) => (
-              <MenuItem key={token} value={token}>
-                {token.toUpperCase()}
-              </MenuItem>
-            ))}
-          </Select>
-          {chartData && <Line data={chartData} />}
-        </Box>
-
-        {/* Generate New Wallet */}
-        <Button variant="contained" color="primary" fullWidth onClick={generateWallet} sx={{ mt: 2, backgroundColor: "#64b5f6" }}>
-          Generate New Wallet
-        </Button>
-
-        {/* Import Wallet */}
-        <Box sx={{ display: "flex", gap: 1, mt: 2 }}>
-          <TextField
-            variant="outlined"
-            label="Enter Private Key"
-            fullWidth
-            sx={{ input: { color: "#fff" } }}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            InputLabelProps={{ style: { color: "#fff" } }}
-          />
-          <Button variant="contained" color="secondary" onClick={importWallet} sx={{ backgroundColor: "#e57373" }}>
-            Import
-          </Button>
-        </Box>
-
-        {/* Wallet Details */}
+        <Typography variant="h4">MetaMask Clone</Typography>
+        <Select value={selectedToken} onChange={(e) => setSelectedToken(e.target.value)} fullWidth sx={{ mt: 2 }}>
+          {Object.keys(prices).map((token) => (
+            <MenuItem key={token} value={token}>{token.toUpperCase()}</MenuItem>
+          ))}
+        </Select>
+        {chartData && <Line data={chartData} options={{ responsive: true, maintainAspectRatio: false }} />}
+        <Button variant="contained" color="primary" fullWidth onClick={generateWallet} sx={{ mt: 2 }}>Generate New Wallet</Button>
         {wallet && (
           <Box sx={{ mt: 3 }}>
-            <Typography variant="h6">Wallet Address:</Typography>
-            <Typography variant="body1" sx={{ wordBreak: "break-all", color: "#ffcc80" }}>{wallet.address}</Typography>
-
-            <Typography variant="h6" sx={{ mt: 2 }}>Private Key:</Typography>
-            <Typography variant="body1" sx={{ wordBreak: "break-all", color: "#ffcc80" }}>{wallet.privateKey}</Typography>
-
-            <Typography variant="h6" sx={{ mt: 2 }}>Balance:</Typography>
-            <Typography variant="body1" sx={{ color: "#ffcc80" }}>{balance} ETH</Typography>
-          </Box>
-        )}
-
-        {/* Swap Functionality */}
-        {wallet && (
-          <Box sx={{ mt: 4 }}>
-            <Typography variant="h6">Swap Tokens</Typography>
-            <TextField
-              variant="outlined"
-              label="Amount"
-              type="number"
-              fullWidth
-              sx={{ input: { color: "#fff" }, mt: 1 }}
-              onChange={(e) => setSwapAmount(e.target.value)}
-            />
-            <Select fullWidth value={swapFrom} onChange={(e) => setSwapFrom(e.target.value)} sx={{ mt: 1 }}>
-              {tokenList.map((token) => <MenuItem key={token} value={token}>{token.toUpperCase()}</MenuItem>)}
-            </Select>
-            <Select fullWidth value={swapTo} onChange={(e) => setSwapTo(e.target.value)} sx={{ mt: 1 }}>
-              {tokenList.map((token) => <MenuItem key={token} value={token}>{token.toUpperCase()}</MenuItem>)}
-            </Select>
-            <Button variant="contained" color="success" fullWidth onClick={swapTokens} sx={{ mt: 2 }}>
-              Swap
-            </Button>
+            <Typography>Wallet Address: {wallet.address}</Typography>
+            <Typography>Balance: {balanceETH} ETH | {balanceUSDC} USDC</Typography>
+            <Button onClick={swapTokens}>Swap {swapDirection === "ETH_TO_USDC" ? "ETH to USDC" : "USDC to ETH"}</Button>
           </Box>
         )}
       </Paper>
@@ -201,6 +135,9 @@ const Wallet = () => {
 };
 
 export default Wallet;
+
+
+
 
 
 
